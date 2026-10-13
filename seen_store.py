@@ -3,7 +3,9 @@
 import json
 import os
 
-STORE_PATH = os.path.join(os.path.dirname(__file__), "seen.json")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# На хостинге с эфемерной ФС (Fly.io) состояние живёт на смонтированном томе.
+STORE_PATH = os.path.join(os.environ.get("DATA_DIR", BASE_DIR), "seen.json")
 
 
 class SeenStore:

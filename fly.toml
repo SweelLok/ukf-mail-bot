@@ -1,0 +1,23 @@
+# fly.toml — конфигурация приложения для Fly.io
+# Документация: https://fly.io/docs/reference/configuration/
+#
+# Важно: [[services]]/[[http_service]] здесь НЕТ специально — бот не
+# обслуживает HTTP (Telegram long polling + POP3, только исходящие
+# соединения). Машина без сервисов работает круглосуточно и не засыпает.
+
+app = "ukf-mail-bot"
+primary_region = "fra"  # Франкфурт — ближе всего к Словакии
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DATA_DIR = "/data"
+
+[mounts]
+  source = "ukf_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

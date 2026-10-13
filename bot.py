@@ -27,18 +27,39 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 MAIL_USER = os.getenv("MAIL_USER", "")
 MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")  # твой chat id; подставится автоматически после /start
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# На Fly.io (и любом хостинге с эфемерной ФС) секреты приходят через
+# переменные окружения (fly secrets set), а постоянные данные —
+# на смонтированный том DATA_DIR (по умолчанию /data).
+DATA_DIR = os.environ.get("DATA_DIR")
+if DATA_DIR:
+    DATA_DIR = os.path.abspath(DATA_DIR)
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+# Постоянное хранилище: seen.json, exports, chat_id, логи.
+STORE_DIR = DATA_DIR or BASE_DIR
+os.makedirs(os.path.join(STORE_DIR, "logs"), exist_ok=True)
+os.makedirs(os.path.join(STORE_DIR, "exports"), exist_ok=True)
+
+EXPORTS_DIR = os.path.join(STORE_DIR, "exports")
+
+# chat_id: из переменной окружения (fly secrets), из файла на томе,
+# или локально из .env (подставится после /start).
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+_chat_id_file = os.path.join(STORE_DIR, "chat_id")
+if not CHAT_ID and os.path.exists(_chat_id_file):
+    with open(_chat_id_file, "r", encoding="utf-8") as _f:
+        CHAT_ID = _f.read().strip()
 
 CHECK_INTERVAL_MINUTES = 30
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-EXPORTS_DIR = os.path.join(BASE_DIR, "exports")
-os.makedirs(EXPORTS_DIR, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     handlers=[
-        logging.FileHandler(os.path.join(BASE_DIR, "logs", "bot.log"), encoding="utf-8"),
+        logging.FileHandler(os.path.join(STORE_DIR, "logs", "bot.log"), encoding="utf-8"),
         logging.StreamHandler(),
     ],
 )
@@ -125,7 +146,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def _persist_chat_id(chat_id: str) -> None:
-    """Сохраняет chat_id в .env, чтобы переживал перезапуск."""
+    """Сохраняет chat_id, чтобы переживал перезапуск.
+
+    На Fly.io пишем в файл на постоянном томе (DATA_DIR).
+    Локально — в .env (старое поведение)."""
+    if DATA_DIR:
+        with open(_chat_id_file, "w", encoding="utf-8") as f:
+            f.write(chat_id)
+        log.info("chat_id %s сохранён в %s", chat_id, _chat_id_file)
+        return
     env_path = os.path.join(BASE_DIR, ".env")
     if not os.path.exists(env_path):
         return

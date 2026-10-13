@@ -1,0 +1,12 @@
+# В контекст сборки НЕ должны попадать секреты и локальный мусор
+.env
+venv/
+__pycache__/
+*.pyc
+*.log
+logs/
+exports/
+seen.json
+chat_id
+.git/
+deploy/
