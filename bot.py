@@ -29,7 +29,7 @@ MAIL_USER = os.getenv("MAIL_USER", "")
 MAIL_PASSWORD = os.getenv("MAIL_PASSWORD", "")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")  # твой chat id; подставится автоматически после /start
 
-CHECK_INTERVAL_HOURS = 5
+CHECK_INTERVAL_MINUTES = 30
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 EXPORTS_DIR = os.path.join(BASE_DIR, "exports")
 os.makedirs(EXPORTS_DIR, exist_ok=True)
@@ -104,7 +104,7 @@ async def send_new_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         await context.bot.send_message(
             chat_id=CHAT_ID,
-            text="✅ Новых писем пока нет. Проверю снова через 5 часов.",
+            text=f"✅ Новых писем пока нет. Проверю снова через {CHECK_INTERVAL_MINUTES} мин.",
         )
 
 
@@ -207,7 +207,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "📊 <b>Статус бота</b>\n\n"
         f"📬 {mail_ok}\n"
         f"👤 Почта: {MAIL_USER}\n"
-        f"⏱ Автопроверка: каждые {CHECK_INTERVAL_HOURS} ч."
+        f"⏱ Автопроверка: каждые {CHECK_INTERVAL_MINUTES} мин."
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -222,9 +222,9 @@ def main() -> None:
     app.add_handler(CommandHandler("status", cmd_status))
 
     job_queue = app.job_queue
-    job_queue.run_repeating(send_new_messages, interval=CHECK_INTERVAL_HOURS * 3600, first=10)
+    job_queue.run_repeating(send_new_messages, interval=CHECK_INTERVAL_MINUTES * 60, first=10)
 
-    log.info("Бот запущен. Автопроверка каждые %d ч.", CHECK_INTERVAL_HOURS)
+    log.info("Бот запущен. Автопроверка каждые %d м.", CHECK_INTERVAL_MINUTES)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

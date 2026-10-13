@@ -1,0 +1,25 @@
+[Unit]
+Description=UKF Mail Bot - Telegram bot for UKF student mail
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=vadim
+WorkingDirectory=/home/vadim/ukf-mail-bot
+ExecStart=/home/vadim/ukf-mail-bot/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+
+# Переменные окружения (дублируют .env, на случай если dotenv не подхватит)
+EnvironmentFile=-/home/vadim/ukf-mail-bot/.env
+
+# Базовая изоляция (безопаснее, но не ломает сеть)
+NoNewPrivileges=true
+PrivateTmp=true
+
+StandardOutput=append:/home/vadim/ukf-mail-bot/logs/bot.log
+StandardError=append:/home/vadim/ukf-mail-bot/logs/bot.log
+
+[Install]
+WantedBy=multi-user.target
