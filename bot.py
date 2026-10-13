@@ -17,6 +17,9 @@ from telegram.ext import (
     Application,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
+    ApplicationHandlerStop,
 )
 
 from mail_client import MailClient
@@ -53,7 +56,14 @@ if not CHAT_ID and os.path.exists(_chat_id_file):
     with open(_chat_id_file, "r", encoding="utf-8") as _f:
         CHAT_ID = _f.read().strip()
 
-CHECK_INTERVAL_MINUTES = 30
+CHECK_INTERVAL_MINUTES = 10
+HEARTBEAT_INTERVAL_HOURS = 24
+
+# Доступ ограничен владельцем бота по Telegram user_id.
+# Узнать свой ID: написать боту @userinfobot в Telegram — он пришлёт число.
+# Как только ID известен, впиши его сюда (и/или в .env / fly secrets
+# как TELEGRAM_ADMIN_ID — переменная окружения имеет приоритет).
+ADMIN_ID = os.getenv("TELEGRAM_ADMIN_ID", "1084411025").strip()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -66,6 +76,37 @@ logging.basicConfig(
 log = logging.getLogger("ukf-bot")
 
 seen = SeenStore()
+
+
+def _is_admin(update: Update) -> bool:
+    """True, если команду прислал владелец бота.
+
+    Пока ADMIN_ID не задан — доступ открыт всем (чтобы бот работал
+    сразу после деплоя). Как только ID известен, впиши его в ADMIN_ID
+    выше или в TELEGRAM_ADMIN_ID — остальные будут проигнорированы."""
+    if not ADMIN_ID:
+        return True
+    user = update.effective_user
+    return bool(user) and str(user.id) == str(ADMIN_ID)
+
+
+BOSS_REPLY = "🛑 Ты не мой босс — и отвечать тебе я не хочу."
+
+
+async def guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Перехватывает любые сообщения не от владельца и отвечает,
+    что общаться бот будет только с хозяином."""
+    if _is_admin(update):
+        return
+    user = update.effective_user
+    log.info("Чужой пользователь user_id=%s username=%s — отказываю", getattr(user, "id", "?"), getattr(user, "username", "?"))
+    message = update.effective_message
+    if message is not None:
+        try:
+            await message.reply_text(BOSS_REPLY)
+        except Exception:
+            log.exception("Не удалось отправить отказ чужому пользователю")
+    raise ApplicationHandlerStop  # дальше по хендлерам не идём
 
 
 def _fmt_message(m: dict) -> str:
@@ -103,7 +144,8 @@ def _scan_inbox() -> list[dict]:
 
 
 async def send_new_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Проверка почты: рассылает новые письма или сообщает, что всё тихо."""
+    """Проверка почты: рассылает только новые письма. Если писем нет —
+    молча выходит, чтобы не засорять чат."""
     if not CHAT_ID:
         return
     try:
@@ -112,24 +154,47 @@ async def send_new_messages(context: ContextTypes.DEFAULT_TYPE) -> None:
         log.exception("Ошибка при проверке почты")
         await context.bot.send_message(chat_id=CHAT_ID, text=f"⚠️ Ошибка доступа к почте: {e}")
         return
+    for m in new:
+        try:
+            await context.bot.send_message(
+                chat_id=CHAT_ID, text=_fmt_message(m), parse_mode="HTML"
+            )
+            seen.mark("INBOX", m["uid"])  # помечаем только после успешной отправки
+        except Exception:
+            log.exception("Не удалось отправить письмо в Telegram")
     if new:
-        for m in new:
-            try:
-                await context.bot.send_message(
-                    chat_id=CHAT_ID, text=_fmt_message(m), parse_mode="HTML"
-                )
-                seen.mark("INBOX", m["uid"])  # помечаем только после успешной отправки
-            except Exception:
-                log.exception("Не удалось отправить письмо в Telegram")
         seen.save()
-    else:
-        await context.bot.send_message(
-            chat_id=CHAT_ID,
-            text=f"✅ Новых писем пока нет. Проверю снова через {CHECK_INTERVAL_MINUTES} мин.",
-        )
+    # Если новых писем нет — ничего не пишем (раньше сюда приходило
+    # «Новых писем пока нет» каждые N минут и засоряло чат).
+
+
+async def heartbeat(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Раз в сутки пишет, что бот жив. Дополнительно проверяет почту,
+    чтобы статус был осмысленным (жив И умеет ходить на почту)."""
+    if not CHAT_ID:
+        return
+    try:
+        await asyncio.to_thread(MailClient(MAIL_USER, MAIL_PASSWORD).connect)
+        mail_ok = "✅"
+    except Exception as e:
+        mail_ok = f"❌ ({e})"
+    text = (
+        "🤖 <b>Бот жив</b>\n\n"
+        f"📬 Почта {mail_ok}\n"
+        f"⏱ Проверяю почту каждые {CHECK_INTERVAL_MINUTES} мин.\n"
+        f"💬 Новые письма приходят только если они есть.\n"
+        f"🕐 Сейчас: {datetime.now():%d.%m.%Y %H:%M}"
+    )
+    try:
+        await context.bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="HTML")
+    except Exception:
+        log.exception("Не удалось отправить heartbeat")
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_admin(update):
+        log.info("Игнорирую команду от чужого user_id=%s", update.effective_user)
+        return
     global CHAT_ID
     if not CHAT_ID:
         CHAT_ID = str(update.effective_chat.id)
@@ -137,6 +202,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (
         "👋 <b>UKF Mail Bot</b>\n\n"
         "Я слежу за твоей университетской почтой и присылаю новые письма.\n\n"
+        f"Автопроверка: каждые {CHECK_INTERVAL_MINUTES} мин. (письма приходят только если они есть).\n"
+        f"Раз в сутки я пишу, что жив.\n\n"
         "Команды:\n"
         "/getmail — выгрузить все письма в один TXT-файл\n"
         "/check — проверить почту прямо сейчас\n"
@@ -182,6 +249,8 @@ def _collect_all_mail() -> list[dict]:
 
 
 async def cmd_getmail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_admin(update):
+        return
     msg = await update.message.reply_text("📥 Читаю все письма с почты, подожди немного…")
     try:
         messages = await asyncio.to_thread(_collect_all_mail)
@@ -218,15 +287,35 @@ async def cmd_getmail(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_admin(update):
+        return
     global CHAT_ID
     if not CHAT_ID:
         CHAT_ID = str(update.effective_chat.id)
         _persist_chat_id(CHAT_ID)
     await update.message.reply_text("🔍 Проверяю почту…")
-    await send_new_messages(context)
+    try:
+        new = await asyncio.to_thread(_scan_inbox)
+    except Exception as e:
+        log.exception("Ошибка при проверке почты")
+        await update.message.reply_text(f"⚠️ Не смог получить доступ к почте: {e}")
+        return
+    if not new:
+        await update.message.reply_text("📭 Новых писем нет.")
+        return
+    for m in new:
+        try:
+            await update.message.reply_text(_fmt_message(m), parse_mode="HTML")
+            seen.mark("INBOX", m["uid"])
+        except Exception:
+            log.exception("Не удалось отправить письмо в Telegram")
+    seen.save()
+    await update.message.reply_text(f"✅ Проверка завершена, новых писем: {len(new)}.")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not _is_admin(update):
+        return
     try:
         await asyncio.to_thread(MailClient(MAIL_USER, MAIL_PASSWORD).connect)
         mail_ok = "✅ подключение к почте работает"
@@ -236,7 +325,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "📊 <b>Статус бота</b>\n\n"
         f"📬 {mail_ok}\n"
         f"👤 Почта: {MAIL_USER}\n"
-        f"⏱ Автопроверка: каждые {CHECK_INTERVAL_MINUTES} мин."
+        f"⏱ Автопроверка: каждые {CHECK_INTERVAL_MINUTES} мин.\n"
+        f"💓 Heartbeat: раз в {HEARTBEAT_INTERVAL_HOURS} ч.\n"
+        f"🔐 Доступ: только твой user_id ({ADMIN_ID or 'все'})"
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -245,6 +336,9 @@ def main() -> None:
     if not BOT_TOKEN:
         raise SystemExit("TELEGRAM_BOT_TOKEN не задан в .env")
     app = Application.builder().token(BOT_TOKEN).build()
+    # Стражник: любой входящий апдейт сначала проходит через guard.
+    # Чужим отвечает отказом и прерывает цепочку; админа пропускает.
+    app.add_handler(MessageHandler(filters.ALL, guard), group=0)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("getmail", cmd_getmail))
     app.add_handler(CommandHandler("check", cmd_check))
@@ -252,8 +346,14 @@ def main() -> None:
 
     job_queue = app.job_queue
     job_queue.run_repeating(send_new_messages, interval=CHECK_INTERVAL_MINUTES * 60, first=10)
+    job_queue.run_repeating(
+        heartbeat, interval=HEARTBEAT_INTERVAL_HOURS * 3600, first=HEARTBEAT_INTERVAL_HOURS * 3600
+    )
 
-    log.info("Бот запущен. Автопроверка каждые %d м.", CHECK_INTERVAL_MINUTES)
+    log.info(
+        "Бот запущен. Автопроверка каждые %d м., heartbeat каждые %d ч. Доступ: только user_id=%s",
+        CHECK_INTERVAL_MINUTES, HEARTBEAT_INTERVAL_HOURS, ADMIN_ID or "все",
+    )
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
