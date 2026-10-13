@@ -92,6 +92,19 @@ def _is_admin(update: Update) -> bool:
 
 BOSS_REPLY = "🛑 Ты не мой босс — и отвечать тебе я не хочу."
 
+ADMIN_HINT = (
+    "Я понимаю только команды:\n"
+    "/start — что я умею\n"
+    "/check — проверить почту сейчас\n"
+    "/getmail — выгрузить все письма в TXT\n"
+    "/status — состояние бота"
+)
+
+
+async def cmd_echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Любой текст, не являющийся командой. Админу — подсказка команд."""
+    await update.message.reply_text(ADMIN_HINT)
+
 
 async def guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Перехватывает любые сообщения не от владельца и отвечает,
@@ -338,11 +351,13 @@ def main() -> None:
     app = Application.builder().token(BOT_TOKEN).build()
     # Стражник: любой входящий апдейт сначала проходит через guard.
     # Чужим отвечает отказом и прерывает цепочку; админа пропускает.
-    app.add_handler(MessageHandler(filters.ALL, guard), group=0)
+    app.add_handler(MessageHandler(filters.ALL, guard), group=-1)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("getmail", cmd_getmail))
     app.add_handler(CommandHandler("check", cmd_check))
     app.add_handler(CommandHandler("status", cmd_status))
+    # Простой текст (не команда) — админу подсказка, чужим уже отказал guard.
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, cmd_echo))
 
     job_queue = app.job_queue
     job_queue.run_repeating(send_new_messages, interval=CHECK_INTERVAL_MINUTES * 60, first=10)
