@@ -6,6 +6,7 @@ UKF Mail Bot — телеграм-бот для университетской �
 """
 
 import asyncio
+import html
 import logging
 import os
 from datetime import datetime
@@ -47,16 +48,19 @@ seen = SeenStore()
 
 
 def _fmt_message(m: dict) -> str:
+    # Текст письма может содержать <, >, & — экранируем, иначе
+    # Telegram отвергает сообщение как некорректный HTML.
+    esc = html.escape
     body = m["body"]
     if len(body) > 3000:
         body = body[:3000] + "…"
     return (
         f"📧 <b>Новое письмо</b>\n"
-        f"👤 От: {m['from']}\n"
-        f"📌 Тема: {m['subject']}\n"
-        f"🕐 Дата: {m['date']}\n"
-        f"📁 Папка: {m['folder']}\n\n"
-        f"{body}"
+        f"👤 От: {esc(str(m['from']))}\n"
+        f"📌 Тема: {esc(str(m['subject']))}\n"
+        f"🕐 Дата: {esc(str(m['date']))}\n"
+        f"📁 Папка: {esc(str(m['folder']))}\n\n"
+        f"{esc(body)}"
     )
 
 
